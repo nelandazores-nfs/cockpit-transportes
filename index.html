@@ -51,12 +51,19 @@
   <h1 class="text-xl font-bold mb-1">Configurar a tua empresa</h1>
   <p class="text-sm text-gray-400 mb-4">Vou criar na tua Drive a pasta da app, as subpastas e a folha “Base de Dados”. Depois adicionas viaturas, máquinas e pessoas.</p>
   <form id="fSetup" class="cartao space-y-3">
+    <label class="block text-sm">NIF da empresa
+      <div class="flex gap-2">
+        <input name="nif" id="sNif" required inputmode="numeric" maxlength="9" pattern="\d{9}" class="campo flex-1" placeholder="9 dígitos">
+        <button type="button" id="btnBuscarNif" class="btn btn-s mt-1 whitespace-nowrap">🔎 Buscar dados</button>
+      </div>
+      <span id="msgNif" class="text-xs text-gray-500">Escreve o NIF e carrega em “Buscar dados”: o nome e a morada vêm do registo oficial europeu (VIES).</span>
+    </label>
     <label class="block text-sm">Nome da empresa<input name="nome" required class="campo" placeholder="Ex.: Transportes Silva, Lda"></label>
+    <label class="block text-sm">Morada / sede<input name="morada" class="campo"></label>
     <div class="grid grid-cols-2 gap-3">
-      <label class="block text-sm">NIF<input name="nif" inputmode="numeric" class="campo"></label>
+      <label class="block text-sm">Código postal<input name="cp" class="campo" placeholder="0000-000"></label>
       <label class="block text-sm">Região (IVA)<select name="regiao" class="campo"><option>Açores</option><option>Madeira</option><option>Continente</option></select></label>
     </div>
-    <label class="block text-sm">Morada / sede<input name="morada" class="campo"></label>
     <label class="block text-sm">Atividade<input name="atividade" class="campo" placeholder="Ex.: transporte de mercadorias, movimentação de terras"></label>
     <label class="block text-sm">O teu nome<input name="utilizador" required class="campo"></label>
     <label class="block text-sm">Outros centros de custo (opcional)

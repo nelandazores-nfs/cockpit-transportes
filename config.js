@@ -4,5 +4,7 @@
 window.COCKPIT_CONFIG = {
   CLIENT_ID: "381028772913-a0nfujhahl929n2rptreoomf6i3bff5a.apps.googleusercontent.com",
   APP_NAME: "Cockpit Transportes",
-  VERSAO: "2.0.0"
+  /* Intermediário (Google Apps Script) que consulta o VIES da Comissão Europeia pelo NIF */
+  NIF_API: "https://script.google.com/macros/s/AKfycbylw14BaRfORP0o-O0d1iplEn7xuxf34_bnWL-HgQwfMl0h5EYlnXn-_IHoze0u0f1dNA/exec",
+  VERSAO: "2.1.0"
 };

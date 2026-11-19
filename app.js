@@ -264,7 +264,7 @@ async function criarEstrutura(dados, log) {
   S.db = { empresa: [], equip: [], manuais: [], pessoas: [], docs: [], os: [], fin: [], manut: [], emp: {} };
   log("Dados da empresa…");
   const emp = {
-    "Nome": dados.nome, "NIF": dados.nif, "Morada": dados.morada, "Atividade": dados.atividade, "Região IVA": dados.regiao,
+    "Nome": dados.nome, "NIF": dados.nif, "Morada": dados.morada, "Código postal": dados.cp, "Atividade": dados.atividade, "Região IVA": dados.regiao,
     "Centros de custo": dados.centros, "Utilizador": dados.utilizador, "Email": S.ctx.email || "",
     "Pastas (não editar)": JSON.stringify(pastas), "Versão": CFG.VERSAO || "", "Criado em": agoraISO()
   };
@@ -755,6 +755,58 @@ $("#btnEntrar").addEventListener("click", entrar);
 $("#btnReentrar").addEventListener("click", async () => { try { await pedirToken(); await sincronizar(false); toast("Sessão retomada."); } catch (e) { toast(e.message, "erro"); } });
 $("#btnMenu").addEventListener("click", dlgMenu);
 $$(".nav-btn").forEach(b => b.addEventListener("click", () => mostrarVista(b.dataset.v)));
+
+/* ---------- NIF: validação e preenchimento automático (VIES) ---------- */
+function nifValido(n) {
+  n = String(n || "").replace(/\D/g, "");
+  if (!/^[1-35-9]\d{8}$/.test(n)) return false;
+  let s = 0; for (let i = 0; i < 8; i++) s += Number(n[i]) * (9 - i);
+  const r = 11 - (s % 11); return (r >= 10 ? 0 : r) === Number(n[8]);
+}
+const MINUSC = new Set(["de", "da", "do", "das", "dos", "e", "a", "o"]);
+function capitalizar(s) {
+  return String(s || "").toLowerCase().split(/\s+/).map((p, i) => {
+    if (p === "lda" || p === "lda.") return "Lda";
+    if (p === "sa" || p === "s.a.") return "S.A.";
+    if (i > 0 && MINUSC.has(p)) return p;
+    return p.charAt(0).toUpperCase() + p.slice(1);
+  }).join(" ");
+}
+function regiaoPorCP(cp) {
+  const n = Number(String(cp || "").slice(0, 4));
+  if (n >= 9000 && n <= 9499) return "Madeira";
+  if (n >= 9500 && n <= 9999) return "Açores";
+  return n ? "Continente" : "";
+}
+function partirMorada(txt) {
+  const linhas = String(txt || "").split(/\n+/).map(s => s.trim()).filter(Boolean);
+  let cp = "", localidade = "";
+  const i = linhas.findIndex(l => /\d{4}-\d{3}/.test(l));
+  if (i >= 0) { const m = linhas[i].match(/(\d{4}-\d{3})\s*(.*)/); cp = m[1]; localidade = m[2]; linhas.splice(i, 1); }
+  return { morada: capitalizar(linhas.join(", ")), cp, localidade: capitalizar(localidade) };
+}
+async function buscarNif() {
+  const f = $("#fSetup"), msg = $("#msgNif"), btn = $("#btnBuscarNif");
+  const nif = f.nif.value.replace(/\D/g, ""); f.nif.value = nif;
+  if (!nifValido(nif)) { msg.className = "text-xs text-red-400"; msg.textContent = "NIF inválido: confirma os 9 dígitos."; return; }
+  if (!CFG.NIF_API) { msg.className = "text-xs text-amber-400"; msg.textContent = "A pesquisa automática ainda não está ligada. Preenche à mão."; return; }
+  btn.disabled = true; btn.textContent = "A procurar…"; msg.className = "text-xs text-gray-400"; msg.textContent = "A consultar o VIES…";
+  try {
+    const r = await fetch(`${CFG.NIF_API}?nif=${nif}`, { redirect: "follow" });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.erro || "Sem resposta");
+    if (!j.valido || !j.nome || j.nome === "---") { msg.className = "text-xs text-amber-400"; msg.textContent = "O VIES não devolveu dados para este NIF (pode não estar registado para IVA intracomunitário). Preenche à mão."; return; }
+    const m = partirMorada(j.morada);
+    f.nome.value = capitalizar(j.nome);
+    f.morada.value = [m.morada, m.localidade].filter(Boolean).join(", ");
+    f.cp.value = m.cp;
+    const reg = regiaoPorCP(m.cp); if (reg) f.regiao.value = reg;
+    msg.className = "text-xs text-green-400"; msg.textContent = "✔ Dados preenchidos a partir do VIES. Confirma e corrige os acentos se for preciso.";
+  } catch (e) { msg.className = "text-xs text-amber-400"; msg.textContent = "Não foi possível obter os dados agora (" + e.message + "). Preenche à mão."; }
+  finally { btn.disabled = false; btn.textContent = "🔎 Buscar dados"; }
+}
+$("#btnBuscarNif").addEventListener("click", buscarNif);
+$("#sNif").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); buscarNif(); } });
 
 $("#fSetup").addEventListener("submit", async ev => {
   ev.preventDefault();
