@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<meta name="description" content="Cockpit de transportes: frota, pessoas, documentos, serviços e despesas. Os dados ficam na Google Drive de cada utilizador.">
+<title>Cockpit Transportes</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./tailwind.css">
+<style>
+  body{margin:0;background:#0b0f17;color:#e5e7eb;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .luz{width:12px;height:12px;border-radius:9999px;display:inline-block;flex:none}
+  .l-verde{background:#22c55e;box-shadow:0 0 6px #22c55e88}
+  .l-amarelo{background:#f59e0b;box-shadow:0 0 6px #f59e0b88}
+  .l-vermelho{background:#ef4444;box-shadow:0 0 6px #ef444488}
+  .l-cinza{background:#6b7280}
+  input,select,textarea{font-size:16px}
+  .tab-on{color:#f59e0b;box-shadow:inset 0 2px 0 #f59e0b}
+  .campo{margin-top:.25rem;width:100%;border-radius:.5rem;background:#1f2937;border:1px solid #374151;padding:.7rem;color:#e5e7eb}
+  .cartao{background:#111827;border:1px solid #1f2937;border-radius:1rem;padding:1rem}
+  .btn{border-radius:.75rem;padding:.75rem 1rem;font-weight:600}
+  .btn-p{background:#f59e0b;color:#111827}
+  .btn-s{background:#1f2937;border:1px solid #374151;color:#e5e7eb}
+  .chip{display:inline-flex;align-items:center;gap:.35rem;font-size:.75rem;background:#1f2937;border-radius:9999px;padding:.2rem .6rem}
+  details>summary{list-style:none;cursor:pointer}
+  details>summary::-webkit-details-marker{display:none}
+  dialog::backdrop{background:#000a}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ===== ECRÃ DE ENTRADA ===== -->
+<section id="ecraEntrada" class="hidden min-h-screen flex flex-col items-center justify-center px-6 text-center gap-5">
+  <img src="./icons/icon-512.png" alt="" class="w-28 h-28 rounded-3xl">
+  <div>
+    <h1 class="text-2xl font-bold">Cockpit Transportes</h1>
+    <p class="text-sm text-gray-400 mt-2">Frota, pessoas, documentos, serviços e despesas.<br>Os teus dados ficam na tua Google Drive, numa pasta criada pela app.</p>
+  </div>
+  <button id="btnEntrar" class="btn btn-p w-full max-w-xs flex items-center justify-center gap-2">
+    <span class="bg-white text-gray-900 rounded-full w-6 h-6 inline-flex items-center justify-center font-bold">G</span> Entrar com Google
+  </button>
+  <p id="msgEntrada" class="text-xs text-gray-400 max-w-xs"></p>
+  <p class="text-[11px] text-gray-500 max-w-xs">A app só pede acesso aos ficheiros que ela própria cria (permissão drive.file). Não vê o resto da tua Drive.</p>
+</section>
+
+<!-- ===== ASSISTENTE DE CONFIGURAÇÃO ===== -->
+<section id="ecraSetup" class="hidden px-4 py-6 max-w-lg mx-auto">
+  <h1 class="text-xl font-bold mb-1">Configurar a tua empresa</h1>
+  <p class="text-sm text-gray-400 mb-4">Vou criar na tua Drive a pasta da app, as subpastas e a folha “Base de Dados”. Depois adicionas viaturas, máquinas e pessoas.</p>
+  <form id="fSetup" class="cartao space-y-3">
+    <label class="block text-sm">Nome da empresa<input name="nome" required class="campo" placeholder="Ex.: Transportes Silva, Lda"></label>
+    <div class="grid grid-cols-2 gap-3">
+      <label class="block text-sm">NIF<input name="nif" inputmode="numeric" class="campo"></label>
+      <label class="block text-sm">Região (IVA)<select name="regiao" class="campo"><option>Açores</option><option>Madeira</option><option>Continente</option></select></label>
+    </div>
+    <label class="block text-sm">Morada / sede<input name="morada" class="campo"></label>
+    <label class="block text-sm">Atividade<input name="atividade" class="campo" placeholder="Ex.: transporte de mercadorias, movimentação de terras"></label>
+    <label class="block text-sm">O teu nome<input name="utilizador" required class="campo"></label>
+    <label class="block text-sm">Outros centros de custo (opcional)
+      <input name="centros" class="campo" placeholder="Ex.: IWGroup (separados por vírgula)">
+      <span class="text-xs text-gray-500">O centro “Principal” existe sempre. Usa outros para atividades que não se podem misturar.</span>
+    </label>
+    <button class="btn btn-p w-full">Criar na minha Drive</button>
+  </form>
+  <pre id="logSetup" class="hidden mt-4 text-xs text-gray-300 whitespace-pre-wrap cartao"></pre>
+</section>
+
+<!-- ===== APP ===== -->
+<div id="ecraApp" class="hidden pb-24">
+  <header class="sticky top-0 z-10 bg-gray-900/95 backdrop-blur border-b border-gray-800 px-4 py-3 flex items-center gap-3">
+    <img src="./icons/icon-192.png" alt="" class="w-9 h-9 rounded-lg">
+    <div class="flex-1 min-w-0">
+      <h1 id="tEmpresa" class="text-base font-semibold leading-tight truncate">Cockpit</h1>
+      <p id="tConta" class="text-xs text-gray-400 truncate"></p>
+    </div>
+    <span id="estadoRede" class="text-[11px] px-2 py-1 rounded bg-gray-800">…</span>
+    <button id="btnMenu" class="text-gray-300 text-xl px-1" aria-label="Definições">⚙</button>
+  </header>
+
+  <div id="faixaSessao" class="hidden bg-amber-500 text-gray-900 text-sm px-4 py-2 flex items-center gap-2">
+    <span class="flex-1">Sessão Google terminada. Os dados mostrados são a última cópia.</span>
+    <button id="btnReentrar" class="font-bold underline">Entrar</button>
+  </div>
+
+  <main class="px-4 py-3 space-y-4">
+    <section id="v-painel" class="vista space-y-4"></section>
+    <section id="v-registar" class="vista hidden space-y-4"></section>
+    <section id="v-frota" class="vista hidden space-y-4"></section>
+    <section id="v-pessoas" class="vista hidden space-y-4"></section>
+    <section id="v-docs" class="vista hidden space-y-4"></section>
+  </main>
+
+  <nav class="fixed bottom-0 inset-x-0 bg-gray-900 border-t border-gray-800 grid grid-cols-5 text-[11px]" style="padding-bottom:env(safe-area-inset-bottom)">
+    <button data-v="painel" class="nav-btn py-2">🚦<br>Painel</button>
+    <button data-v="registar" class="nav-btn py-2">➕<br>Registar</button>
+    <button data-v="frota" class="nav-btn py-2">🚚<br>Frota</button>
+    <button data-v="pessoas" class="nav-btn py-2">🪪<br>Pessoas</button>
+    <button data-v="docs" class="nav-btn py-2">📁<br>Docs</button>
+  </nav>
+</div>
+
+<div id="toast" class="hidden fixed left-4 right-4 bottom-24 z-30 rounded-xl p-3 text-sm font-semibold shadow-lg"></div>
+
+<!-- diálogos -->
+<dialog id="dlg" class="rounded-2xl bg-gray-900 text-gray-100 border border-gray-700 p-0 w-[94vw] max-w-md">
+  <div id="dlgCorpo" class="p-4 space-y-3 max-h-[85vh] overflow-y-auto"></div>
+</dialog>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="./config.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
