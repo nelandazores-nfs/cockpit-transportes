@@ -699,7 +699,7 @@ function dlgEquipamento() {
     <h2 class="font-semibold">Nova viatura ou máquina</h2>
     <div class="rounded-2xl border-2 border-dashed border-amber-500 bg-amber-500/10 p-4 text-center space-y-2">
       <label class="btn btn-p w-full flex items-center justify-center gap-2 text-base cursor-pointer">
-        📷 Fotografar livrete ou chapa
+        📷 Fotografar Documentos ou Chapa de ID
         <input id="eqFotoCam" type="file" accept="image/*" capture="environment" class="hidden">
       </label>
       <label class="text-xs underline text-amber-300 cursor-pointer">ou escolher uma foto da galeria

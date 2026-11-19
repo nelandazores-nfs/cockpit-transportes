@@ -1,7 +1,7 @@
 /* Service worker do Cockpit Transportes: guarda a "casca" da app para abrir sem rede.
    Nunca guarda em cache pedidos ao Google (entrada, Drive, Sheets): esses vão sempre à rede. */
-const VERSAO = "cockpit-v2.2.2";
-const CASCA = ["./", "./index.html", "./app.js?v=2.2.2", "./config.js?v=2.2.2", "./tailwind.css?v=2.2.2", "./manifest.json", "./icons/icon-192.png", "./icons/icon-512.png"];
+const VERSAO = "cockpit-v2.2.3";
+const CASCA = ["./", "./index.html", "./app.js?v=2.2.3", "./config.js?v=2.2.3", "./tailwind.css?v=2.2.3", "./manifest.json", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", ev => {
   ev.waitUntil(caches.open(VERSAO).then(c => c.addAll(CASCA)).then(() => self.skipWaiting()));
