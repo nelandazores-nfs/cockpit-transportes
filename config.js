@@ -6,5 +6,5 @@ window.COCKPIT_CONFIG = {
   APP_NAME: "Cockpit Transportes",
   /* Intermediário (Google Apps Script) que consulta o VIES da Comissão Europeia pelo NIF */
   NIF_API: "https://script.google.com/macros/s/AKfycbylw14BaRfORP0o-O0d1iplEn7xuxf34_bnWL-HgQwfMl0h5EYlnXn-_IHoze0u0f1dNA/exec",
-  VERSAO: "2.1.1"
+  VERSAO: "2.2.0"
 };

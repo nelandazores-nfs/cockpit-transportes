@@ -42,7 +42,7 @@ const DOCS_PESSOA = {
 };
 const DOCS_EQUIP = {
   "Viatura": ["Certificado de matrícula", "Seguro", "Inspeção periódica", "IUC"],
-  "Máquina": ["Seguro", "Declaração de conformidade CE", "Verificação periódica"]
+  "Máquina": ["Chapa de identificação", "Seguro", "Declaração de conformidade CE", "Verificação periódica"]
 };
 const MANUAIS = ["Manual do operador", "Manual de oficina", "Catálogo de peças", "Esquemas elétricos e hidráulicos"];
 
@@ -144,6 +144,59 @@ function carregarFicheiro(file, pai, nome) {
   fd.append("metadata", new Blob([JSON.stringify({ name: nome || file.name, parents: [pai] })], { type: "application/json" }));
   fd.append("file", file);
   return api(`${UPLOAD}/files?uploadType=multipart&fields=id,name,webViewLink`, { method: "POST", body: fd });
+}
+
+/* ---------- OCR com a Google Drive do utilizador ----------
+   A imagem é carregada como Google Doc (a Drive faz OCR), o texto é exportado
+   e o documento temporário vai para o lixo. */
+async function ocrDrive(file) {
+  const fd = new FormData();
+  fd.append("metadata", new Blob([JSON.stringify({ name: "OCR temporário · " + (file.name || "foto"), mimeType: "application/vnd.google-apps.document", parents: [S.ctx.pastas.entrada] })], { type: "application/json" }));
+  fd.append("file", file);
+  const doc = await api(`${UPLOAD}/files?uploadType=multipart&ocrLanguage=pt&fields=id`, { method: "POST", body: fd });
+  const r = await fetch(`${DRIVE}/files/${doc.id}/export?mimeType=text/plain`, { headers: { Authorization: "Bearer " + tok } });
+  const texto = r.ok ? await r.text() : "";
+  try { await api(`${DRIVE}/files/${doc.id}`, { method: "PATCH", body: { trashed: true } }); } catch (e) {}
+  return texto;
+}
+
+const MARCAS = ["Mitsubishi", "Fuso", "Hitachi", "Kubota", "Iveco", "Mercedes-Benz", "Mercedes", "Renault", "Ford", "Toyota", "Nissan", "Isuzu", "Volvo", "MAN", "DAF", "Scania",
+  "Caterpillar", "CAT", "JCB", "Komatsu", "Bobcat", "Takeuchi", "Yanmar", "Volkswagen", "Peugeot", "Citroën", "Citroen", "Fiat", "Opel", "Manitou", "Liebherr", "Case",
+  "New Holland", "John Deere", "Doosan", "Hyundai", "Kobelco", "Wacker Neuson", "Kramer", "Merlo", "Dieci", "Terex", "Ausa", "Piaggio", "Mahindra", "Dacia", "Seat", "Skoda"];
+const COMBUST = [["gasóleo", "Gasóleo"], ["gasoleo", "Gasóleo"], ["diesel", "Gasóleo"], ["gasolina", "Gasolina"], ["elétrico", "Elétrico"], ["eletrico", "Elétrico"], ["gpl", "GPL"], ["híbrido", "Híbrido"]];
+
+/* Lê o texto de um certificado de matrícula (campos europeus A, B, D.1, D.3, E, F.1, G, P.1, P.2, P.3)
+   ou de uma chapa de máquina (Model, Serial/PIN, Year, kW, kg) e devolve o que conseguir. */
+function lerDocumento(txt) {
+  const t = String(txt || "").replace(/\r/g, "");
+  const T = t.toUpperCase();
+  const linhaApos = rot => { const m = t.match(new RegExp("(?:^|\\n|\\s)" + rot + "\\s*[.:)\\-]?\\s*([^\\n]{2,60})", "i")); return m ? m[1].trim() : ""; };
+  const numApos = rot => { const m = t.match(new RegExp("(?:^|\\n|\\s)" + rot + "\\s*[.:)\\-]?\\s*(\\d[\\d .,]{0,8})", "i")); return m ? Number(m[1].replace(/[ .]/g, "").replace(",", ".")) : ""; };
+  const r = {};
+  /* matrícula portuguesa: 3 pares (letras ou dígitos) separados por hífen ou espaço */
+  const mm = T.match(/\b([A-Z0-9]{2})[-\s]([A-Z0-9]{2})[-\s]([A-Z0-9]{2})\b/g);
+  if (mm) { const ok = mm.map(x => x.replace(/\s/g, "-")).find(x => /[A-Z]/.test(x) && /\d/.test(x)); if (ok) r.matricula = ok; }
+  const vin = T.replace(/\s+/g, " ").match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+  if (vin && /\d/.test(vin[0]) && /[A-Z]/.test(vin[0])) r.serie = vin[0];
+  let marca = linhaApos("D\\.1");
+  if (!marca) { const m = MARCAS.find(x => new RegExp("\\b" + x.replace(/[-]/g, "\\-") + "\\b", "i").test(t)); if (m) marca = m; }
+  if (marca) r.marca = capitalizar(marca.split(/\s{2,}|\s+D\.\d/)[0]);
+  const modelo = linhaApos("D\\.3") || linhaApos("(?:MODELO|MODEL|TYPE|TIPO)");
+  if (modelo) r.modelo = modelo.split(/\s{2,}|\s+[A-Z]\.\d/)[0].trim();
+  const tipoCert = linhaApos("D\\.2"); if (tipoCert) r.tipoCert = tipoCert.split(/\s{2,}/)[0];
+  if (!r.serie) { const s = linhaApos("(?:N\\.?º? ?(?:DE )?S[ÉE]RIE|SERIAL(?: NO\\.?| NUMBER)?|PIN|S\\/N)"); if (s) r.serie = s.split(/\s{2,}/)[0].replace(/\s/g, ""); }
+  const b = t.match(/(?:^|\s)B\s*[.:)]?\s*(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})/);
+  const ano = b ? b[3] : ((t.match(/(?:ANO|YEAR|MFG|FABRICO)[^\d]{0,28}((?:19|20)\d{2})/i) || [])[1] || "");
+  if (ano) r.ano = ano;
+  const f1 = numApos("F\\.1"), g = numApos("G");
+  if (f1 && g && f1 > g && f1 < 60000) { r.massaMax = f1; r.tara = g; r.carga = f1 - g; }
+  const p1 = numApos("P\\.1"); if (p1 && p1 > 40 && p1 < 20000) r.cilindrada = p1;
+  let p2 = numApos("P\\.2"); if (!p2) { const k = t.match(/(\d{1,3}(?:[.,]\d)?)\s*kW/i); if (k) p2 = Number(k[1].replace(",", ".")); }
+  if (p2 && p2 < 1000) r.potencia = p2;
+  const comb = COMBUST.find(([k]) => new RegExp("\\b" + k + "\\b", "i").test(t)); if (comb) r.combustivel = comb[1];
+  const motor = linhaApos("(?:MOTOR|ENGINE)"); if (motor && !/^\d+$/.test(motor)) r.motor = motor.split(/\s{2,}/)[0];
+  if (!r.massaMax) { const kg = t.match(/(?:PESO|WEIGHT|MASSA)[^\d]{0,20}(\d[\d .]{2,6})\s*kg/i); if (kg) r.peso = Number(kg[1].replace(/[ .]/g, "")); }
+  return r;
 }
 
 /* ---------- Sheets ---------- */
@@ -625,6 +678,17 @@ function dlgManual(eqId, nomeDoc) {
 function dlgEquipamento() {
   abrirDialogo(`
     <h2 class="font-semibold">Nova viatura ou máquina</h2>
+    <div class="rounded-2xl border-2 border-dashed border-amber-500 bg-amber-500/10 p-4 text-center space-y-2">
+      <label class="btn btn-p w-full flex items-center justify-center gap-2 text-base cursor-pointer">
+        📷 Fotografar livrete ou chapa
+        <input id="eqFotoCam" type="file" accept="image/*" capture="environment" class="hidden">
+      </label>
+      <label class="text-xs underline text-amber-300 cursor-pointer">ou escolher uma foto da galeria
+        <input id="eqFotoGal" type="file" accept="image/*,application/pdf" class="hidden">
+      </label>
+      <p id="eqOcrMsg" class="text-xs text-gray-300">Tira a foto ao certificado de matrícula (livrete) ou à chapa da máquina: a app lê e preenche o que conseguir.</p>
+      <img id="eqFotoPrev" class="hidden mx-auto max-h-32 rounded-lg" alt="">
+    </div>
     <form id="fEq" class="space-y-3">
       <label class="block text-sm">Tipo<select name="tipo" id="eqTipo" class="campo"><option>Viatura</option><option>Máquina</option></select></label>
       <div class="grid grid-cols-2 gap-3">
@@ -653,14 +717,46 @@ function dlgEquipamento() {
       <div class="flex gap-2"><button type="button" data-fechar class="btn btn-s flex-1">Cancelar</button><button class="btn btn-p flex-1">Criar</button></div>
       <p class="text-[11px] text-gray-500">Cria a pasta do equipamento (Manuais técnicos, Documentos, Faturas) e a lista de manuais a obter.</p>
     </form>`, c => {
-    const tipo = $("#eqTipo", c);
+    const tipo = $("#eqTipo", c), f = $("#fEq", c), msg = $("#eqOcrMsg", c);
     const aj = () => $$(".so-viatura", c).forEach(x => x.style.display = tipo.value === "Viatura" ? "" : "none"); tipo.addEventListener("change", aj); aj();
-    $("#fEq", c).addEventListener("submit", async ev => {
+    let foto = null;
+    const lerFoto = async ev => {
+      const file = ev.target.files && ev.target.files[0]; if (!file) return;
+      foto = file;
+      if (file.type.startsWith("image/")) { const p = $("#eqFotoPrev", c); p.src = URL.createObjectURL(file); p.classList.remove("hidden"); }
+      msg.className = "text-xs text-gray-300"; msg.textContent = "A ler o documento… (10–20 s)";
+      try {
+        await garantirToken();
+        const texto = await ocrDrive(file);
+        const r = lerDocumento(texto);
+        const preenchidos = [];
+        const por = (campo, valor, rot) => { if (valor !== undefined && valor !== "" && f[campo] && !f[campo].value) { f[campo].value = valor; preenchidos.push(rot); } };
+        if (r.matricula) { tipo.value = "Viatura"; aj(); } else if (!r.massaMax && (r.serie || r.modelo)) { /* chapa: mantém o tipo escolhido */ }
+        por("marca", r.marca, "marca"); por("modelo", r.modelo, "modelo"); por("ano", r.ano, "ano"); por("matricula", r.matricula, "matrícula");
+        por("serie", r.serie, "nº série/VIN"); por("motor", r.motor, "motor"); por("carga", r.carga, "carga útil");
+        const notas = [r.tipoCert && "Tipo (D.2): " + r.tipoCert, r.massaMax && `Massa máxima ${r.massaMax} kg, tara ${r.tara} kg`, r.cilindrada && `Cilindrada ${r.cilindrada} cm³`,
+          r.potencia && `Potência ${r.potencia} kW`, r.combustivel, r.peso && `Peso ${r.peso} kg`].filter(Boolean).join(" · ");
+        if (notas) { f.notas.value = [f.notas.value, notas + " (lido da foto)"].filter(Boolean).join("\n"); preenchidos.push("notas técnicas"); }
+        if (preenchidos.length) { msg.className = "text-xs text-green-400"; msg.textContent = `✔ Preenchi: ${preenchidos.join(", ")}. Confirma os dados antes de criar.`; }
+        else { msg.className = "text-xs text-amber-400"; msg.textContent = "Não consegui ler dados desta foto. Tenta com mais luz e o documento direito, ou preenche à mão. A foto fica guardada na mesma."; }
+      } catch (e) { msg.className = "text-xs text-amber-400"; msg.textContent = "Não foi possível ler a foto agora (" + e.message + "). Preenche à mão; a foto fica guardada."; }
+    };
+    $("#eqFotoCam", c).addEventListener("change", lerFoto);
+    $("#eqFotoGal", c).addEventListener("change", lerFoto);
+    f.addEventListener("submit", async ev => {
       ev.preventDefault();
       const dados = Object.fromEntries(new FormData(ev.target).entries()), btn = $("button:not([data-fechar])", ev.target);
       try {
         await garantirToken(); btn.disabled = true; btn.textContent = "A criar pastas…";
         const eq = await criarEquipamento(dados);
+        if (foto) {
+          btn.textContent = "A guardar a foto…";
+          const nomeDoc = dados.tipo === "Máquina" ? "Chapa de identificação" : "Certificado de matrícula";
+          const d = (S.db.docs || []).find(x => x["Titular ID"] === eq["ID"] && x["Documento"] === nomeDoc);
+          const ext = (foto.name.split(".").pop() || "jpg").toLowerCase();
+          const up = await carregarFicheiro(foto, eq["Pasta documentos"], `${nomeDoc} · ${eq["ID"]} ${eq["Marca"]} ${eq["Modelo"]}.${ext}`);
+          if (d) { Object.assign(d, { "Ficheiro": up.webViewLink, "Estado": "Carregado", "Atualizado em": agoraISO() }); if (d._row) await atualizarLinha("Documentos", d); gravarEstado(); }
+        }
         fecharDialogo(); toast(`${eq["ID"]} criado. Pasta e lista de manuais prontas.`); mostrarVista("frota");
       } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "Criar"; }
     });
