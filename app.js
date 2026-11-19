@@ -83,6 +83,7 @@ function gravarEstado() { store.set("ctx", S.ctx); store.set("db", S.db); }
 /* ---------- autenticação (Google Identity Services, token no browser) ---------- */
 class SessaoExpirada extends Error { constructor() { super("Sessão Google terminada. Toca em “Entrar”."); } }
 let tok = null, tokExp = 0, tc = null, pend = null;
+(() => { const x = store.get("sessao", null); if (x && x.tok && Date.now() < x.tokExp - 60000) { tok = x.tok; tokExp = x.tokExp; } })();
 const tokenValido = () => tok && Date.now() < tokExp - 60000;
 
 function iniciarTC() {
@@ -95,6 +96,7 @@ function iniciarTC() {
       if (google.accounts.oauth2.hasGrantedAllScopes && !google.accounts.oauth2.hasGrantedAllScopes(r, SCOPE))
         return p.rej(new Error("Sem a permissão de ficheiros da Drive a app não consegue guardar os teus dados."));
       tok = r.access_token; tokExp = Date.now() + (Number(r.expires_in) || 3600) * 1000;
+      store.set("sessao", { tok, tokExp });
       $("#faixaSessao").classList.add("hidden");
       p.res(tok);
     },
@@ -121,7 +123,7 @@ async function api(url, opt = {}) {
   let body = opt.body;
   if (body && typeof body === "object" && !(body instanceof Blob) && !(body instanceof FormData)) { body = JSON.stringify(body); h["Content-Type"] = "application/json"; }
   const r = await fetch(url, { method: opt.method || "GET", headers: h, body });
-  if (r.status === 401) { tok = null; $("#faixaSessao").classList.remove("hidden"); throw new SessaoExpirada(); }
+  if (r.status === 401) { tok = null; store.del("sessao"); $("#faixaSessao").classList.remove("hidden"); throw new SessaoExpirada(); }
   const txt = await r.text(); let j = null;
   try { j = txt ? JSON.parse(txt) : null; } catch (e) {}
   if (!r.ok) throw new Error((j && j.error && j.error.message) || ("Erro " + r.status));
@@ -149,7 +151,24 @@ function carregarFicheiro(file, pai, nome) {
 /* ---------- OCR com a Google Drive do utilizador ----------
    A imagem é carregada como Google Doc (a Drive faz OCR), o texto é exportado
    e o documento temporário vai para o lixo. */
-async function ocrDrive(file) {
+/* reduz fotos grandes (telemóvel) antes do OCR: mais rápido e mais fiável */
+function reduzirImagem(file, max = 1800) {
+  return new Promise(res => {
+    if (!file.type || !file.type.startsWith("image/") || file.type === "image/gif") return res(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      if (k === 1 && file.size < 1.5e6) return res(file);
+      const cv = document.createElement("canvas"); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      cv.toBlob(b => res(b ? new File([b], "foto.jpg", { type: "image/jpeg" }) : file), "image/jpeg", 0.88);
+    };
+    img.onerror = () => res(file);
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function ocrDrive(original) {
+  const file = await reduzirImagem(original);
   const fd = new FormData();
   fd.append("metadata", new Blob([JSON.stringify({ name: "OCR temporário · " + (file.name || "foto"), mimeType: "application/vnd.google-apps.document", parents: [S.ctx.pastas.entrada] })], { type: "application/json" }));
   fd.append("file", file);
@@ -720,28 +739,46 @@ function dlgEquipamento() {
     const tipo = $("#eqTipo", c), f = $("#fEq", c), msg = $("#eqOcrMsg", c);
     const aj = () => $$(".so-viatura", c).forEach(x => x.style.display = tipo.value === "Viatura" ? "" : "none"); tipo.addEventListener("change", aj); aj();
     let foto = null;
+    const doOcr = new Set(); /* campos preenchidos pela leitura (podem ser substituídos por nova foto) */
+    const repetir = (texto) => `<span class="block">${texto}</span>
+      <label class="btn btn-p w-full mt-2 flex items-center justify-center gap-2 cursor-pointer">📷 Tirar outra foto
+        <input type="file" accept="image/*" capture="environment" class="hidden eq-refoto"></label>
+      <span class="block mt-1 text-gray-400">Dica: boa luz, sem reflexos, documento direito e a encher a foto.</span>`;
     const lerFoto = async ev => {
       const file = ev.target.files && ev.target.files[0]; if (!file) return;
       foto = file;
       if (file.type.startsWith("image/")) { const p = $("#eqFotoPrev", c); p.src = URL.createObjectURL(file); p.classList.remove("hidden"); }
       msg.className = "text-xs text-gray-300"; msg.textContent = "A ler o documento… (10–20 s)";
       try {
-        await garantirToken();
+        if (!tokenValido()) throw new SessaoExpirada();
         const texto = await ocrDrive(file);
         const r = lerDocumento(texto);
         const preenchidos = [];
-        const por = (campo, valor, rot) => { if (valor !== undefined && valor !== "" && f[campo] && !f[campo].value) { f[campo].value = valor; preenchidos.push(rot); } };
+        const por = (campo, valor, rot) => {
+          if (valor === undefined || valor === "" || !f[campo]) return;
+          if (f[campo].value && !doOcr.has(campo)) return; /* não mexe no que foi escrito à mão */
+          f[campo].value = valor; doOcr.add(campo); preenchidos.push(rot);
+        };
         if (r.matricula) { tipo.value = "Viatura"; aj(); } else if (!r.massaMax && (r.serie || r.modelo)) { /* chapa: mantém o tipo escolhido */ }
         por("marca", r.marca, "marca"); por("modelo", r.modelo, "modelo"); por("ano", r.ano, "ano"); por("matricula", r.matricula, "matrícula");
         por("serie", r.serie, "nº série/VIN"); por("motor", r.motor, "motor"); por("carga", r.carga, "carga útil");
         const notas = [r.tipoCert && "Tipo (D.2): " + r.tipoCert, r.massaMax && `Massa máxima ${r.massaMax} kg, tara ${r.tara} kg`, r.cilindrada && `Cilindrada ${r.cilindrada} cm³`,
           r.potencia && `Potência ${r.potencia} kW`, r.combustivel, r.peso && `Peso ${r.peso} kg`].filter(Boolean).join(" · ");
-        if (notas) { f.notas.value = [f.notas.value, notas + " (lido da foto)"].filter(Boolean).join("\n"); preenchidos.push("notas técnicas"); }
-        if (preenchidos.length) { msg.className = "text-xs text-green-400"; msg.textContent = `✔ Preenchi: ${preenchidos.join(", ")}. Confirma os dados antes de criar.`; }
-        else { msg.className = "text-xs text-amber-400"; msg.textContent = "Não consegui ler dados desta foto. Tenta com mais luz e o documento direito, ou preenche à mão. A foto fica guardada na mesma."; }
-      } catch (e) { msg.className = "text-xs text-amber-400"; msg.textContent = "Não foi possível ler a foto agora (" + e.message + "). Preenche à mão; a foto fica guardada."; }
+        if (notas) { f.notas.value = [f.notas.value.split("\n").filter(l => !/\(lido da foto\)$/.test(l)).join("\n"), notas + " (lido da foto)"].filter(Boolean).join("\n"); preenchidos.push("notas técnicas"); }
+        const essenciais = ["marca", "modelo"].filter(k => !f[k].value);
+        if (preenchidos.length && !essenciais.length) { msg.className = "text-xs text-green-400"; msg.innerHTML = repetir(`✔ Preenchi: ${preenchidos.join(", ")}. Confirma os dados antes de criar.`); }
+        else if (preenchidos.length) { msg.className = "text-xs text-amber-300"; msg.innerHTML = repetir(`Li só: ${preenchidos.join(", ")}. Falta ${essenciais.join(" e ")}: tira outra foto ou preenche à mão.`); }
+        else { msg.className = "text-xs text-amber-400"; msg.innerHTML = repetir("Não consegui ler dados desta foto."); }
+      } catch (e) {
+        if (!tokenValido()) {
+          msg.className = "text-xs text-amber-300";
+          msg.innerHTML = 'A sessão Google terminou. <button type="button" id="eqReler" class="btn btn-p w-full mt-2">🔑 Entrar e ler a foto</button>';
+          $("#eqReler", c).addEventListener("click", () => { garantirToken().then(() => lerFoto({ target: { files: [foto] } }), er => { msg.textContent = er.message; }); });
+        } else { msg.className = "text-xs text-amber-400"; msg.innerHTML = repetir("Não foi possível ler a foto agora (" + esc(e.message) + ")."); }
+      }
     };
     $("#eqFotoCam", c).addEventListener("change", lerFoto);
+    c.addEventListener("change", ev => { if (ev.target.classList.contains("eq-refoto")) lerFoto(ev); });
     $("#eqFotoGal", c).addEventListener("change", lerFoto);
     f.addEventListener("submit", async ev => {
       ev.preventDefault();
@@ -805,7 +842,7 @@ function dlgMenu() {
     $("#mSync", c).addEventListener("click", () => { fecharDialogo(); sincronizar(true); });
     $("#mSair", c).addEventListener("click", () => {
       try { if (tok && google?.accounts?.oauth2?.revoke) google.accounts.oauth2.revoke(tok, () => {}); } catch (e) {}
-      tok = null; ["ctx", "db", "fila", "vista", "subReg"].forEach(store.del); S.ctx = null; S.db = null;
+      tok = null; ["ctx", "db", "fila", "vista", "subReg", "sessao"].forEach(store.del); S.ctx = null; S.db = null;
       fecharDialogo(); mostrarEcra("ecraEntrada");
     });
   });
@@ -930,7 +967,7 @@ document.addEventListener("click", ev => {
   else if (b.dataset.manual) { const [e, m] = b.dataset.manual.split("|"); dlgManual(e, m); }
   else if (b.dataset.ir) mostrarVista(b.dataset.ir);
   else if (b.dataset.sub) { store.set("subReg", b.dataset.sub); render(); }
-  else if (b.id === "btnNovoEq") dlgEquipamento();
+  else if (b.id === "btnNovoEq") { if (tokenValido()) dlgEquipamento(); else garantirToken().then(dlgEquipamento, e => toast(e.message, "erro")); }
   else if (b.id === "btnNovaPessoa") dlgPessoa();
   else if (b.id === "btnPromptClaude") copiarPrompt();
   else if (b.id === "btnSync") sincronizar(true);
@@ -1008,7 +1045,8 @@ function arrancar() {
   if (!CFG.CLIENT_ID) $("#msgEntrada").textContent = "Falta configurar o ID de cliente Google (config.js).";
   if (S.ctx && S.ctx.sheetId && S.db) {
     mostrarEcra("ecraApp"); mostrarVista(S.vista);
-    $("#faixaSessao").classList.remove("hidden");
+    if (tokenValido()) sincronizar(false).catch(() => {});
+    else $("#faixaSessao").classList.remove("hidden");
   } else mostrarEcra("ecraEntrada");
 }
 arrancar();
